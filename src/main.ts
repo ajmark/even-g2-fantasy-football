@@ -33,6 +33,7 @@ interface SleeperMatchup {
   roster_id: number
   matchup_id: number | null
   points: number
+  starters: string[]
 }
 
 interface SleeperUser {
@@ -40,10 +41,62 @@ interface SleeperUser {
   display_name: string
 }
 
+interface SleeperLeagueDetail {
+  scoring_settings: Record<string, number>
+}
+
+interface SleeperProjection {
+  player_id: string
+  stats: Record<string, number>
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${SLEEPER_API}${path}`)
   if (!res.ok) throw new Error(`Sleeper API ${path} failed: ${res.status}`)
   return res.json() as Promise<T>
+}
+
+const PROJECTIONS_BASE = 'https://api.sleeper.app/projections/nfl'
+const PROJECTION_POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF']
+
+let projectionsCache: { key: string; points: Map<string, number> } | null = null
+
+function computeProjectedPoints(stats: Record<string, number>, scoring: Record<string, number>): number {
+  let total = 0
+  for (const [statKey, weight] of Object.entries(scoring)) {
+    const value = stats[statKey]
+    if (typeof value === 'number') total += value * weight
+  }
+  return total
+}
+
+async function getProjectedPointsMap(
+  season: string,
+  week: number,
+  scoring: Record<string, number>,
+): Promise<Map<string, number>> {
+  const key = `${season}-${week}`
+  if (projectionsCache?.key === key) return projectionsCache.points
+
+  const positionParams = PROJECTION_POSITIONS.map((p) => `position[]=${p}`).join('&')
+  const res = await fetch(`${PROJECTIONS_BASE}/${season}/${week}?season_type=regular&${positionParams}`)
+  if (!res.ok) throw new Error(`Sleeper projections failed: ${res.status}`)
+  const projections = (await res.json()) as SleeperProjection[]
+
+  const points = new Map<string, number>()
+  for (const proj of projections) {
+    points.set(proj.player_id, computeProjectedPoints(proj.stats ?? {}, scoring))
+  }
+  projectionsCache = { key, points }
+  return points
+}
+
+function sumProjected(starters: string[], points: Map<string, number>): number {
+  return starters.reduce((sum, id) => sum + (points.get(id) ?? 0), 0)
+}
+
+function projSuffix(projected: number | null): string {
+  return projected !== null ? ` (proj ${projected.toFixed(1)})` : ''
 }
 
 async function fetchMatchupText(): Promise<string> {
@@ -55,10 +108,11 @@ async function fetchMatchupText(): Promise<string> {
   const league = leagues[0]
   if (!league) return 'No active Sleeper\nleagues found.'
 
-  const [rosters, matchups, users] = await Promise.all([
+  const [rosters, matchups, users, leagueDetail] = await Promise.all([
     getJson<SleeperRoster[]>(`/league/${league.league_id}/rosters`),
     getJson<SleeperMatchup[]>(`/league/${league.league_id}/matchups/${week}`),
     getJson<SleeperUser[]>(`/league/${league.league_id}/users`),
+    getJson<SleeperLeagueDetail>(`/league/${league.league_id}`),
   ])
 
   const myRoster = rosters.find((r) => r.owner_id === SLEEPER_USER_ID)
@@ -82,12 +136,19 @@ async function fetchMatchupText(): Promise<string> {
   const myPoints = myMatchup.points ?? 0
   const myName = nameByRosterId(myRoster.roster_id)
 
+  const projectedPoints = await getProjectedPointsMap(season, week, leagueDetail.scoring_settings).catch((err) => {
+    console.error('Failed to fetch Sleeper projections:', err)
+    return null
+  })
+  const myProjected = projectedPoints ? sumProjected(myMatchup.starters ?? [], projectedPoints) : null
+
   if (!oppMatchup) {
-    return `${league.name}\nWeek ${week}\n\n${myName}: ${myPoints.toFixed(2)}\n\nWaiting on opponent.`
+    return `${league.name}\nWeek ${week}\n\n${myName}: ${myPoints.toFixed(2)}${projSuffix(myProjected)}\n\nWaiting on opponent.`
   }
 
   const oppPoints = oppMatchup.points ?? 0
   const oppName = nameByRosterId(oppMatchup.roster_id)
+  const oppProjected = projectedPoints ? sumProjected(oppMatchup.starters ?? [], projectedPoints) : null
 
   let status = 'TIED'
   if (myPoints > oppPoints) status = 'WINNING'
@@ -97,8 +158,8 @@ async function fetchMatchupText(): Promise<string> {
     `${league.name}`,
     `Week ${week} - ${status}`,
     '',
-    `${myName}: ${myPoints.toFixed(2)}`,
-    `${oppName}: ${oppPoints.toFixed(2)}`,
+    `${myName}: ${myPoints.toFixed(2)}${projSuffix(myProjected)}`,
+    `${oppName}: ${oppPoints.toFixed(2)}${projSuffix(oppProjected)}`,
     '',
     '(tap to refresh)',
   ].join('\n')
