@@ -1,0 +1,19 @@
+{
+  "package_id": "com.example.fantasyfootball",
+  "edition": "202601",
+  "name": "Fantasy Football",
+  "version": "0.1.0",
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.12",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Fetches your current week's fantasy football matchup score from Sleeper.",
+      "whitelist": ["https://api.sleeper.app"]
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}
