@@ -57,7 +57,7 @@ same Wi-Fi network.
 1. Clone the repo and install dependencies:
 
    ```bash
-   git clone https://github.com/ajmark/fantasy-football.git
+   git clone https://github.com/ajmark/even-g2-fantasy-football.git
    cd fantasy-football
    npm install
    ```
